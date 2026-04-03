@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A444 — Pitch Reference Processor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0a0b0d;
+    --panel:    #0f1114;
+    --border:   #1e2228;
+    --amber:    #e8a020;
+    --amber-dim:#7a4f08;
+    --green:    #39ff85;
+    --green-dim:#0d4020;
+    --red:      #ff3b3b;
+    --text:     #c8cdd6;
+    --text-dim: #4a5260;
+    --mono:     'Share Tech Mono', monospace;
+    --display:  'Orbitron', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.07) 2px,
+      rgba(0,0,0,0.07) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* Subtle vignette */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.6) 100%);
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  .rack {
+    width: 100%;
+    max-width: 860px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* ── TOP HEADER STRIP ── */
+  .header {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-bottom: 2px solid var(--amber-dim);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--amber), transparent);
+    opacity: 0.5;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .brand-name {
+    font-family: var(--display);
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: 0.15em;
+    color: var(--amber);
+    text-shadow: 0 0 20px rgba(232,160,32,0.5);
+  }
+  .brand-sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+  .header-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+  }
+  .model-num {
+    font-family: var(--display);
+    font-size: 11px;
+    color: var(--amber-dim);
+    letter-spacing: 0.15em;
+  }
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+  }
+  .led {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    box-shadow: none;
+    transition: all 0.2s;
+  }
+  .led.on-green  { background: var(--green); box-shadow: 0 0 8px var(--green), 0 0 16px rgba(57,255,133,0.4); }
+  .led.on-amber  { background: var(--amber); box-shadow: 0 0 8px var(--amber), 0 0 16px rgba(232,160,32,0.4); }
+  .led.on-red    { background: var(--red);   box-shadow: 0 0 8px var(--red),   0 0 16px rgba(255,59,59,0.4);  }
+  .led.blink { animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.15} }
+
+  /* ── MAIN PANEL ── */
+  .main-panel {
+    display: grid;
+    grid-template-columns: 1fr 240px;
+    gap: 2px;
+  }
+
+  /* ── SCOPE / VISUALIZER ── */
+  .scope-unit {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .unit-label {
+    font-size: 9px;
+    letter-spacing: 0.25em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .unit-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .scope-wrap {
+    position: relative;
+    background: #050608;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  canvas.fft {
+    width: 100%;
+    height: 160px;
+    display: block;
+  }
+  .scope-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(30,34,40,0.5) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(30,34,40,0.5) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+  .scope-label {
+    position: absolute;
+    top: 8px; left: 10px;
+    font-size: 9px;
+    color: var(--amber-dim);
+    letter-spacing: 0.2em;
+  }
+
+  /* waveform */
+  canvas.waveform {
+    width: 100%;
+    height: 80px;
+    display: block;
+  }
+
+  /* ── CONTROLS COLUMN ── */
+  .controls-col {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .control-unit {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Big frequency display */
+  .freq-display {
+    background: #050608;
+    border: 1px solid var(--border);
+    padding: 14px 12px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .freq-display::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 120%, rgba(232,160,32,0.06) 0%, transparent 70%);
+  }
+  .freq-label {
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  .freq-value {
+    font-family: var(--display);
+    font-size: 36px;
+    font-weight: 900;
+    color: var(--amber);
+    text-shadow: 0 0 30px rgba(232,160,32,0.6), 0 0 60px rgba(232,160,32,0.2);
+    letter-spacing: 0.05em;
+    line-height: 1;
+  }
+  .freq-unit {
+    font-size: 11px;
+    color: var(--amber-dim);
+    letter-spacing: 0.3em;
+    margin-top: 4px;
+  }
+  .freq-arrow {
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-top: 8px;
+    letter-spacing: 0.1em;
+  }
+
+  /* Meter bar */
+  .meter-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .meter-bar-bg {
+    height: 8px;
+    background: #050608;
+    border: 1px solid var(--border);
+    border-radius: 1px;
+    overflow: hidden;
+    position: relative;
+  }
+  .meter-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--green-dim), var(--green));
+    box-shadow: 0 0 8px rgba(57,255,133,0.5);
+    transition: width 0.05s linear;
+    border-radius: 1px;
+  }
+  .meter-bar-fill.clip { background: linear-gradient(90deg, #7a1010, var(--red)); }
+  .meter-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 8px;
+    color: var(--text-dim);
+  }
+
+  /* Toggle / Big Button */
+  .btn-process {
+    width: 100%;
+    padding: 16px;
+    background: transparent;
+    border: 1px solid var(--amber-dim);
+    color: var(--amber);
+    font-family: var(--display);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-process::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--amber);
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .btn-process:hover::before { opacity: 0.07; }
+  .btn-process.active {
+    border-color: var(--green);
+    color: var(--green);
+    box-shadow: 0 0 20px rgba(57,255,133,0.15), inset 0 0 20px rgba(57,255,133,0.05);
+  }
+  .btn-process.active::before { background: var(--green); }
+
+  .btn-file {
+    width: 100%;
+    padding: 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+  }
+  .btn-file:hover { border-color: var(--amber-dim); color: var(--amber); }
+
+  /* Param rows */
+  .param-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .param-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+  }
+  .param-key { color: var(--text-dim); letter-spacing: 0.1em; }
+  .param-val { color: var(--green); font-family: var(--display); font-size: 11px; letter-spacing: 0.05em; }
+  .param-val.amber { color: var(--amber); }
+
+  /* ── BOTTOM STATUS BAR ── */
+  .status-bar {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--border);
+    padding: 8px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.12em;
+  }
+  .status-msg {
+    color: var(--text-dim);
+    transition: color 0.3s;
+    min-width: 260px;
+  }
+  .status-msg.active { color: var(--green); }
+
+  /* file info */
+  .file-info {
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+    text-align: center;
+    min-height: 13px;
+  }
+  .file-info.loaded { color: var(--amber); }
+
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="rack">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="brand">
+      <span class="brand-name">A444</span>
+      <span class="brand-sub">Harmonic Pitch Processor</span>
+    </div>
+    <div class="header-meta">
+      <span class="model-num">MODEL PV-444 · PHASE VOCODER</span>
+      <div class="status-row">
+        <span class="led" id="led-power"></span><span>PWR</span>
+        <span class="led" id="led-proc"></span><span>PROC</span>
+        <span class="led" id="led-clip"></span><span>CLIP</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main-panel">
+
+    <!-- LEFT: SCOPE -->
+    <div class="scope-unit">
+      <div class="unit-label">Spectrum Analyzer — FFT 2048</div>
+
+      <div class="scope-wrap">
+        <div class="scope-grid"></div>
+        <div class="scope-label">FREQ →</div>
+        <canvas class="fft" id="fftCanvas"></canvas>
+      </div>
+
+      <div class="unit-label">Input Waveform</div>
+      <div class="scope-wrap" style="border-color: var(--border)">
+        <canvas class="waveform" id="waveCanvas"></canvas>
+      </div>
+
+      <div class="param-grid">
+        <div class="param-row">
+          <span class="param-key">ALGORITHM</span>
+          <span class="param-val">PHASE VOCODER · STFT/OLA</span>
+        </div>
+        <div class="param-row">
+          <span class="param-key">PITCH SHIFT</span>
+          <span class="param-val">+16 CENTS</span>
+        </div>
+        <div class="param-row">
+          <span class="param-key">SHIFT RATIO</span>
+          <span class="param-val" id="ratioVal">1.009257</span>
+        </div>
+        <div class="param-row">
+          <span class="param-key">FFT SIZE</span>
+          <span class="param-val">2048 BINS</span>
+        </div>
+        <div class="param-row">
+          <span class="param-key">OVERLAP</span>
+          <span class="param-val">4× (75%)</span>
+        </div>
+        <div class="param-row">
+          <span class="param-key">WINDOW</span>
+          <span class="param-val">HANN</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: CONTROLS -->
+    <div class="controls-col">
+
+      <!-- TUNING DISPLAY -->
+      <div class="control-unit">
+        <div class="unit-label">Tuning Reference</div>
+        <div class="freq-display">
+          <div class="freq-label">OUTPUT REFERENCE</div>
+          <div class="freq-value">444</div>
+          <div class="freq-unit">H Z</div>
+          <div class="freq-arrow">↑ +16¢ from A=440 Hz</div>
+        </div>
+        <div class="meter-wrap">
+          <div class="unit-label">Input Level</div>
+          <div class="meter-bar-bg">
+            <div class="meter-bar-fill" id="meterFill"></div>
+          </div>
+          <div class="meter-labels">
+            <span>-48</span><span>-24</span><span>-12</span><span>-6</span><span>0 dBFS</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- MODE -->
+      <div class="control-unit">
+        <div class="unit-label">Source</div>
+        <button class="btn-process" id="btnMic">◉ MICROPHONE</button>
+        <div style="height:2px"></div>
+        <label class="btn-file" id="labelFile">⊞ LOAD AUDIO FILE</label>
+        <input type="file" id="fileInput" accept="audio/*">
+        <div class="file-info" id="fileInfo">no file loaded</div>
+      </div>
+
+      <!-- PROCESS -->
+      <div class="control-unit">
+        <div class="unit-label">Processing</div>
+        <button class="btn-process" id="btnProcess" disabled>▶ ENGAGE</button>
+        <div class="param-grid" style="margin-top:4px">
+          <div class="param-row">
+            <span class="param-key">STATUS</span>
+            <span class="param-val" id="procStatus">STANDBY</span>
+          </div>
+          <div class="param-row">
+            <span class="param-key">LATENCY</span>
+            <span class="param-val amber" id="latVal">— ms</span>
+          </div>
+          <div class="param-row">
+            <span class="param-key">SAMPLE RATE</span>
+            <span class="param-val amber" id="srVal">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPORT (file mode) -->
+      <div class="control-unit" id="exportUnit" style="display:none">
+        <div class="unit-label">Export</div>
+        <button class="btn-process" id="btnExport">↓ RENDER &amp; DOWNLOAD</button>
+        <div class="param-row" style="margin-top:4px">
+          <span class="param-key">PROGRESS</span>
+          <span class="param-val" id="exportPct">—</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- STATUS BAR -->
+  <div class="status-bar">
+    <span class="status-msg" id="statusMsg">SELECT SOURCE · MIC OR FILE · TO BEGIN</span>
+    <span>A444 PV-444 · © 2025 · PHASE VOCODER ENGINE</span>
+    <span id="clockDisp">00:00:00</span>
+  </div>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────
+const PITCH_CENTS   = 16;
+const PITCH_RATIO   = Math.pow(2, PITCH_CENTS / 1200); // ≈ 1.009257
+const FFT_SIZE      = 2048;
+const HOP_DIVISOR   = 4;           // overlap factor
+const HOP_SIZE      = FFT_SIZE / HOP_DIVISOR;
+const WINDOW_SIZE   = FFT_SIZE;
+
+document.getElementById('ratioVal').textContent = PITCH_RATIO.toFixed(7);
+
+// ─────────────────────────────────────────────────────────────────
+// HANN WINDOW
+// ─────────────────────────────────────────────────────────────────
+function makeHann(size) {
+  const w = new Float32Array(size);
+  for (let i = 0; i < size; i++)
+    w[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (size - 1)));
+  return w;
+}
+const HANN = makeHann(WINDOW_SIZE);
+
+// ─────────────────────────────────────────────────────────────────
+// PHASE VOCODER — pitch shift a Float32Array buffer
+// Returns a new Float32Array at the same length, pitch-shifted.
+// ─────────────────────────────────────────────────────────────────
+function phaseVocoder(input, pitchRatio) {
+  const N       = FFT_SIZE;
+  const hop_a   = HOP_SIZE;
+  const hop_s   = Math.round(hop_a * pitchRatio);
+  const numFrames = Math.floor((input.length - N) / hop_a) + 1;
+  const outputLen = hop_s * numFrames + N;
+  const output  = new Float32Array(outputLen);
+  const window  = HANN;
+
+  // Phase accumulators
+  const lastPhase  = new Float32Array(N); // analysis phase from last frame
+  const sumPhase   = new Float32Array(N); // synthesis phase accumulator
+
+  // OLA normalization buffer
+  const normBuffer = new Float32Array(outputLen);
+
+  for (let frame = 0; frame < numFrames; frame++) {
+    const inOffset  = frame * hop_a;
+    const outOffset = frame * hop_s;
+
+    // ── 1. Windowed frame ──
+    const windowed = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      windowed[i] = (input[inOffset + i] || 0) * window[i];
+    }
+
+    // ── 2. FFT (Cooley-Tukey in-place) ──
+    const re = new Float32Array(windowed);
+    const im = new Float32Array(N);
+    fft(re, im, false);
+
+    // ── 3. Phase analysis & synthesis ──
+    const magOut   = new Float32Array(N);
+    const phaseOut = new Float32Array(N);
+
+    for (let k = 0; k < N / 2 + 1; k++) {
+      const mag   = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+      const phase = Math.atan2(im[k], re[k]);
+
+      // True frequency estimation
+      let dp = phase - lastPhase[k] - 2 * Math.PI * k * hop_a / N;
+      // Wrap to [-π, π]
+      dp -= 2 * Math.PI * Math.round(dp / (2 * Math.PI));
+      const trueFreq = 2 * Math.PI * k / N + dp / hop_a;
+
+      // Accumulate synthesis phase
+      sumPhase[k] += hop_s * trueFreq;
+      lastPhase[k] = phase;
+
+      magOut[k]   = mag;
+      phaseOut[k] = sumPhase[k];
+    }
+
+    // Mirror for negative frequencies
+    for (let k = 1; k < N / 2; k++) {
+      magOut[N - k]   = magOut[k];
+      phaseOut[N - k] = -phaseOut[k];
+    }
+
+    // ── 4. Back to complex ──
+    const reS = new Float32Array(N);
+    const imS = new Float32Array(N);
+    for (let k = 0; k < N; k++) {
+      reS[k] = magOut[k] * Math.cos(phaseOut[k]);
+      imS[k] = magOut[k] * Math.sin(phaseOut[k]);
+    }
+
+    // ── 5. IFFT ──
+    fft(reS, imS, true);
+
+    // ── 6. Overlap-add with Hann window ──
+    for (let i = 0; i < N; i++) {
+      const idx = outOffset + i;
+      output[idx]  += reS[i] * window[i];
+      normBuffer[idx] += window[i] * window[i];
+    }
+  }
+
+  // Normalize OLA
+  for (let i = 0; i < outputLen; i++) {
+    if (normBuffer[i] > 1e-8) output[i] /= normBuffer[i];
+  }
+
+  return output;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// COOLEY-TUKEY RADIX-2 DIT FFT (in-place, iterative)
+// ─────────────────────────────────────────────────────────────────
+function fft(re, im, inverse) {
+  const N = re.length;
+  // Bit-reversal permutation
+  let j = 0;
+  for (let i = 1; i < N; i++) {
+    let bit = N >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [re[i], re[j]] = [re[j], re[i]];
+      [im[i], im[j]] = [im[j], im[i]];
+    }
+  }
+  // Butterfly
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = 2 * Math.PI / len * (inverse ? 1 : -1);
+    const wRe = Math.cos(ang), wIm = Math.sin(ang);
+    for (let i = 0; i < N; i += len) {
+      let curRe = 1, curIm = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const uRe = re[i+k],        uIm = im[i+k];
+        const vRe = re[i+k+len/2],  vIm = im[i+k+len/2];
+        const tvRe = vRe * curRe - vIm * curIm;
+        const tvIm = vRe * curIm + vIm * curRe;
+        re[i+k]         = uRe + tvRe;
+        im[i+k]         = uIm + tvIm;
+        re[i+k+len/2]   = uRe - tvRe;
+        im[i+k+len/2]   = uIm - tvIm;
+        const nr = curRe * wRe - curIm * wIm;
+        curIm = curRe * wIm + curIm * wRe;
+        curRe = nr;
+      }
+    }
+  }
+  if (inverse) {
+    for (let i = 0; i < N; i++) { re[i] /= N; im[i] /= N; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// AUDIO CONTEXT & VISUALISATION
+// ─────────────────────────────────────────────────────────────────
+let audioCtx    = null;
+let analyser    = null;
+let micStream   = null;
+let sourceNode  = null;
+let processing  = false;
+let mode        = null; // 'mic' | 'file'
+let fileBuffer  = null;
+let startTime   = null;
+
+const fftCanvas  = document.getElementById('fftCanvas');
+const waveCanvas = document.getElementById('waveCanvas');
+const fftCtx     = fftCanvas.getContext('2d');
+const waveCtx    = waveCanvas.getContext('2d');
+
+function resizeCanvases() {
+  [fftCanvas, waveCanvas].forEach(c => {
+    c.width  = c.offsetWidth  * devicePixelRatio;
+    c.height = c.offsetHeight * devicePixelRatio;
+  });
+}
+window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
+
+let animId = null;
+
+function startViz() {
+  if (!analyser) return;
+  const freqData = new Uint8Array(analyser.frequencyBinCount);
+  const timeData = new Uint8Array(analyser.frequencyBinCount);
+
+  function frame() {
+    animId = requestAnimationFrame(frame);
+    analyser.getByteFrequencyData(freqData);
+    analyser.getByteTimeDomainData(timeData);
+
+    // ── FFT ──
+    const fw = fftCanvas.width, fh = fftCanvas.height;
+    fftCtx.clearRect(0, 0, fw, fh);
+    fftCtx.fillStyle = '#050608';
+    fftCtx.fillRect(0, 0, fw, fh);
+
+    const barW = fw / freqData.length;
+    for (let i = 0; i < freqData.length; i++) {
+      const v = freqData[i] / 255;
+      const barH = v * fh;
+      // Colour by intensity
+      const hue = 40 + v * 60; // amber → yellow-green
+      fftCtx.fillStyle = `hsla(${hue}, 90%, ${20 + v * 50}%, 0.95)`;
+      fftCtx.fillRect(i * barW, fh - barH, Math.max(barW - 0.5, 0.5), barH);
+    }
+
+    // Glow line on top of bars
+    fftCtx.save();
+    fftCtx.shadowBlur = 8;
+    fftCtx.shadowColor = 'rgba(232,160,32,0.8)';
+    fftCtx.beginPath();
+    for (let i = 0; i < freqData.length; i++) {
+      const v = freqData[i] / 255;
+      const x = i * barW + barW / 2;
+      const y = fh - v * fh;
+      i === 0 ? fftCtx.moveTo(x, y) : fftCtx.lineTo(x, y);
+    }
+    fftCtx.strokeStyle = 'rgba(232,160,32,0.6)';
+    fftCtx.lineWidth = 1;
+    fftCtx.stroke();
+    fftCtx.restore();
+
+    // ── WAVEFORM ──
+    const ww = waveCanvas.width, wh = waveCanvas.height;
+    waveCtx.clearRect(0, 0, ww, wh);
+    waveCtx.fillStyle = '#050608';
+    waveCtx.fillRect(0, 0, ww, wh);
+
+    // Center line
+    waveCtx.strokeStyle = 'rgba(30,34,40,0.8)';
+    waveCtx.lineWidth = 1;
+    waveCtx.beginPath();
+    waveCtx.moveTo(0, wh / 2);
+    waveCtx.lineTo(ww, wh / 2);
+    waveCtx.stroke();
+
+    waveCtx.save();
+    waveCtx.shadowBlur = 6;
+    waveCtx.shadowColor = 'rgba(57,255,133,0.6)';
+    waveCtx.beginPath();
+    const sliceW = ww / timeData.length;
+    for (let i = 0; i < timeData.length; i++) {
+      const v = timeData[i] / 128 - 1;
+      const x = i * sliceW;
+      const y = (v * 0.9 + 1) / 2 * wh;
+      i === 0 ? waveCtx.moveTo(x, y) : waveCtx.lineTo(x, y);
+    }
+    waveCtx.strokeStyle = 'rgba(57,255,133,0.9)';
+    waveCtx.lineWidth = 1.5;
+    waveCtx.stroke();
+    waveCtx.restore();
+
+    // ── Level meter ──
+    let sum = 0;
+    for (let i = 0; i < freqData.length; i++) sum += freqData[i];
+    const rms = sum / freqData.length / 255;
+    const pct = Math.min(rms * 3 * 100, 100);
+    const fill = document.getElementById('meterFill');
+    fill.style.width = pct + '%';
+    fill.classList.toggle('clip', pct > 90);
+    document.getElementById('led-clip').className = 'led' + (pct > 90 ? ' on-red blink' : '');
+  }
+  frame();
+}
+
+function stopViz() {
+  if (animId) { cancelAnimationFrame(animId); animId = null; }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MIC + REAL-TIME PHASE VOCODER via AudioWorklet
+// ─────────────────────────────────────────────────────────────────
+async function startMicProcessing() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+  }
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  document.getElementById('srVal').textContent = audioCtx.sampleRate + ' Hz';
+
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  const micSource = audioCtx.createMediaStreamSource(micStream);
+
+  // Analyser pre-process
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.75;
+  micSource.connect(analyser);
+
+  // ScriptProcessor for real-time pitch shift (AudioWorklet not universally available offline)
+  const bufSize = 4096;
+  const proc = audioCtx.createScriptProcessor(bufSize, 1, 1);
+
+  const ringBuf    = new Float32Array(FFT_SIZE * 4);
+  let   ringWrite  = 0;
+  const outBuf     = new Float32Array(FFT_SIZE * 4);
+  let   outRead    = 0;
+  let   outWrite   = 0;
+  let   lastFramePos = -HOP_SIZE;
+
+  proc.onaudioprocess = (e) => {
+    const inp = e.inputBuffer.getChannelData(0);
+    const out = e.outputBuffer.getChannelData(0);
+    const t0  = performance.now();
+
+    // Write input into ring
+    for (let i = 0; i < inp.length; i++) {
+      ringBuf[ringWrite % ringBuf.length] = inp[i];
+      ringWrite++;
+    }
+
+    // Process frames
+    while (ringWrite - lastFramePos >= FFT_SIZE + HOP_SIZE) {
+      lastFramePos += HOP_SIZE;
+      const frame = new Float32Array(FFT_SIZE);
+      for (let i = 0; i < FFT_SIZE; i++) {
+        frame[i] = ringBuf[(lastFramePos + i) % ringBuf.length];
+      }
+      // Single-frame phase vocoder step
+      const shifted = processSingleFrame(frame);
+      for (let i = 0; i < shifted.length; i++) {
+        outBuf[(outWrite + i) % outBuf.length] += shifted[i];
+      }
+      outWrite += HOP_SIZE;
+    }
+
+    // Read output
+    for (let i = 0; i < out.length; i++) {
+      out[i] = outBuf[outRead % outBuf.length];
+      outBuf[outRead % outBuf.length] = 0;
+      outRead++;
+    }
+    document.getElementById('latVal').textContent = (performance.now() - t0).toFixed(1) + ' ms';
+  };
+
+  micSource.connect(proc);
+  proc.connect(audioCtx.destination);
+  sourceNode = proc;
+
+  startViz();
+  setStatus('PROCESSING · MIC INPUT · A=444 Hz', true);
+  document.getElementById('procStatus').textContent = 'ACTIVE';
+  document.getElementById('led-proc').className = 'led on-green blink';
+  document.getElementById('led-power').className = 'led on-amber';
+}
+
+// Per-frame phase vocoder (stateful closures for phase accumulators)
+const _lastPhase = new Float32Array(FFT_SIZE);
+const _sumPhase  = new Float32Array(FFT_SIZE);
+
+function processSingleFrame(frame) {
+  const N      = FFT_SIZE;
+  const hop_a  = HOP_SIZE;
+  const hop_s  = Math.round(hop_a * PITCH_RATIO);
+
+  const re = new Float32Array(N);
+  const im = new Float32Array(N);
+  for (let i = 0; i < N; i++) re[i] = frame[i] * HANN[i];
+
+  fft(re, im, false);
+
+  const reS = new Float32Array(N);
+  const imS = new Float32Array(N);
+
+  for (let k = 0; k <= N / 2; k++) {
+    const mag   = Math.sqrt(re[k]*re[k] + im[k]*im[k]);
+    const phase = Math.atan2(im[k], re[k]);
+
+    let dp = phase - _lastPhase[k] - 2*Math.PI*k*hop_a/N;
+    dp    -= 2*Math.PI * Math.round(dp / (2*Math.PI));
+    const trueFreq = 2*Math.PI*k/N + dp/hop_a;
+
+    _sumPhase[k]  += hop_s * trueFreq;
+    _lastPhase[k]  = phase;
+
+    reS[k] = mag * Math.cos(_sumPhase[k]);
+    imS[k] = mag * Math.sin(_sumPhase[k]);
+  }
+  for (let k = 1; k < N/2; k++) {
+    reS[N-k] =  reS[k];
+    imS[N-k] = -imS[k];
+  }
+
+  fft(reS, imS, true);
+
+  const out = new Float32Array(N + hop_s);
+  for (let i = 0; i < N; i++) {
+    out[i] += reS[i] * HANN[i];
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// FILE MODE — offline render then play back
+// ─────────────────────────────────────────────────────────────────
+async function renderFile() {
+  if (!fileBuffer) return;
+  if (!audioCtx) audioCtx = new AudioContext({ sampleRate: fileBuffer.sampleRate });
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  setStatus('RENDERING · PHASE VOCODER PROCESSING…', true);
+  document.getElementById('exportPct').textContent = '0%';
+
+  // Small delay to let UI update
+  await new Promise(r => setTimeout(r, 30));
+
+  const ch0 = fileBuffer.getChannelData(0);
+  const shifted = phaseVocoder(ch0, PITCH_RATIO);
+
+  const outCtx = new OfflineAudioContext(1, shifted.length, fileBuffer.sampleRate);
+  const buf    = outCtx.createBuffer(1, shifted.length, fileBuffer.sampleRate);
+  buf.copyToChannel(shifted, 0);
+
+  document.getElementById('exportPct').textContent = '100%';
+
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.75;
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(analyser);
+  analyser.connect(audioCtx.destination);
+  src.start();
+
+  sourceNode = src;
+  startViz();
+
+  setStatus('PLAYING · PITCH-SHIFTED OUTPUT · A=444 Hz', true);
+  document.getElementById('procStatus').textContent = 'PLAYING';
+  document.getElementById('led-proc').className = 'led on-green blink';
+  document.getElementById('srVal').textContent = fileBuffer.sampleRate + ' Hz';
+
+  // Store for export
+  window._shiftedBuf = { data: shifted, sr: fileBuffer.sampleRate };
+}
+
+async function exportFile() {
+  if (!window._shiftedBuf) return;
+  const { data, sr } = window._shiftedBuf;
+  const wavBlob = encodeWav(data, sr);
+  const url = URL.createObjectURL(wavBlob);
+  const a   = document.createElement('a');
+  a.href    = url;
+  a.download = 'a444_shifted.wav';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function encodeWav(samples, sampleRate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buf);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o+i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// UI WIRING
+// ─────────────────────────────────────────────────────────────────
+function setStatus(msg, active) {
+  const el = document.getElementById('statusMsg');
+  el.textContent = msg;
+  el.className = 'status-msg' + (active ? ' active' : '');
+}
+
+function stopAll() {
+  stopViz();
+  if (sourceNode) {
+    try { sourceNode.disconnect(); } catch(_) {}
+    try { sourceNode.stop?.(); } catch(_) {}
+    sourceNode = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+  }
+  processing = false;
+  document.getElementById('led-proc').className = 'led';
+  document.getElementById('procStatus').textContent = 'STANDBY';
+  document.getElementById('latVal').textContent = '— ms';
+  document.getElementById('meterFill').style.width = '0%';
+}
+
+// MIC BUTTON
+document.getElementById('btnMic').addEventListener('click', async () => {
+  if (mode === 'mic' && processing) {
+    stopAll();
+    mode = null;
+    processing = false;
+    document.getElementById('btnMic').classList.remove('active');
+    document.getElementById('btnProcess').disabled = true;
+    document.getElementById('btnProcess').textContent = '▶ ENGAGE';
+    setStatus('STOPPED', false);
+    return;
+  }
+  mode = 'mic';
+  document.getElementById('btnMic').classList.add('active');
+  document.getElementById('exportUnit').style.display = 'none';
+  document.getElementById('btnProcess').disabled = false;
+  setStatus('MIC SELECTED · PRESS ENGAGE TO BEGIN', false);
+});
+
+// FILE INPUT
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (!audioCtx) audioCtx = new AudioContext();
+  const ab = await file.arrayBuffer();
+  fileBuffer = await audioCtx.decodeAudioData(ab);
+  document.getElementById('fileInfo').textContent = file.name + ' · ' + (file.size / 1024).toFixed(0) + ' KB';
+  document.getElementById('fileInfo').className = 'file-info loaded';
+  document.getElementById('exportUnit').style.display = 'flex';
+  mode = 'file';
+  document.getElementById('btnMic').classList.remove('active');
+  document.getElementById('btnProcess').disabled = false;
+  setStatus('FILE LOADED · PRESS ENGAGE TO RENDER', false);
+});
+document.getElementById('labelFile').addEventListener('click', () => {
+  document.getElementById('fileInput').click();
+});
+
+// ENGAGE BUTTON
+document.getElementById('btnProcess').addEventListener('click', async () => {
+  if (processing) {
+    stopAll();
+    processing = false;
+    document.getElementById('btnProcess').textContent = '▶ ENGAGE';
+    document.getElementById('btnProcess').classList.remove('active');
+    setStatus('STOPPED', false);
+    return;
+  }
+  processing = true;
+  document.getElementById('btnProcess').textContent = '■ STOP';
+  document.getElementById('btnProcess').classList.add('active');
+  document.getElementById('led-power').className = 'led on-amber';
+
+  try {
+    if (mode === 'mic') {
+      await startMicProcessing();
+    } else if (mode === 'file') {
+      await renderFile();
+    }
+  } catch(err) {
+    console.error(err);
+    setStatus('ERROR: ' + err.message, false);
+    stopAll();
+    document.getElementById('btnProcess').textContent = '▶ ENGAGE';
+    document.getElementById('btnProcess').classList.remove('active');
+    processing = false;
+  }
+  startTime = Date.now();
+});
+
+// EXPORT
+document.getElementById('btnExport').addEventListener('click', exportFile);
+
+// ─────────────────────────────────────────────────────────────────
+// CLOCK
+// ─────────────────────────────────────────────────────────────────
+setInterval(() => {
+  const now = new Date();
+  document.getElementById('clockDisp').textContent =
+    now.toTimeString().slice(0,8);
+}, 1000);
+
+// Boot
+document.getElementById('led-power').className = 'led on-amber';
+setStatus('SYSTEM READY · SELECT MIC OR FILE', false);
+</script>
+</body>
+</html>
