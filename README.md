@@ -3,7 +3,7 @@
 > A real-time audio pitch shifter built on a from-scratch Phase Vocoder engine.  
 > Shifts all audio **+16 cents** — moving the concert pitch reference from A=440 Hz to **A=444 Hz**.
 
-**[Live Demo](#)** · [How It Works](#algorithm) · [Usage](#usage)
+**[Live Demo](#https://github.com/jharnois444/a444-pitch-processor/actions)** · [How It Works](#algorithm) · [Usage](#usage)
 
 ---
 
